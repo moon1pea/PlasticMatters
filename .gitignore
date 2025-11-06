@@ -1,0 +1,14 @@
+# 数据集
+dataset/
+
+# 模型权重
+checkpoint/
+pretrained_ckpts/
+results/
+
+# 临时文件
+*.pyc
+__pycache__/
+core
+core.*
+
