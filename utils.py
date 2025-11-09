@@ -1,9 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-
-# All rights reserved.
-
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
 
 
 import os
@@ -179,8 +173,6 @@ class MetricLogger(object):
             end = time.time()
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-        # print('{} Total time: {} ({:.4f} s / it)'.format(
-        #     header, total_time_str, total_time / len(iterable)))     
         if len(iterable) > 0:
             print('{} Total time: {} ({:.4f} s / it)'.format(
                 header, total_time_str, total_time / len(iterable)))
@@ -500,15 +492,62 @@ def auto_load_model(args, model, model_without_ddp, optimizer, loss_scaler, mode
             args.resume = os.path.join(output_dir, 'checkpoint-%d.pth' % latest_ckpt)
         print("Auto resume checkpoint: %s" % args.resume)
 
+    # Handle --finetune parameter (fine-tuning: load model weights only, reset optimizer)
+    if args.finetune:
+        if args.finetune.startswith('https'):
+            checkpoint = torch.hub.load_state_dict_from_url(
+                args.finetune, map_location='cpu', check_hash=True)
+        else:
+            checkpoint = torch.load(args.finetune, map_location='cpu')
+        
+        # Load model weights only (not optimizer/epoch)
+        try:
+            result = model_without_ddp.load_state_dict(checkpoint['model'], strict=False)
+            # Handle return value: newer PyTorch returns NamedTuple with missing_keys and unexpected_keys
+            if hasattr(result, 'missing_keys'):
+                missing_keys = result.missing_keys
+                unexpected_keys = result.unexpected_keys
+            elif isinstance(result, tuple) and len(result) == 2:
+                missing_keys, unexpected_keys = result
+            else:
+                missing_keys = []
+                unexpected_keys = []
+            
+            if len(missing_keys) > 0:
+                print(f"Fine-tuning: {len(missing_keys)} keys not found in checkpoint (will use random initialization):")
+                for key in missing_keys[:10]:
+                    print(f"  - {key}")
+                if len(missing_keys) > 10:
+                    print(f"  ... and {len(missing_keys) - 10} more keys")
+                # Check if missing keys are CBP-related
+                cbp_keys = [k for k in missing_keys if 'cbp' in k.lower()]
+                if len(cbp_keys) > 0:
+                    print(f"\n  ✓ Note: {len(cbp_keys)} CBP-related keys not found. CBP layers will be initialized randomly.")
+                    print(f"    This is expected when loading a checkpoint without CBP into a model with CBP enabled.")
+            if len(unexpected_keys) > 0:
+                print(f"Fine-tuning: {len(unexpected_keys)} unexpected keys in checkpoint (will be ignored):")
+                for key in unexpected_keys[:10]:
+                    print(f"  - {key}")
+                if len(unexpected_keys) > 10:
+                    print(f"  ... and {len(unexpected_keys) - 10} more keys")
+        except Exception as e:
+            print(f"Warning: Non-strict loading failed: {e}")
+            print("Attempting strict loading...")
+            model_without_ddp.load_state_dict(checkpoint['model'], strict=True)
+        
+        print(f"Fine-tuning from checkpoint: {args.finetune}")
+        print("Only model weights loaded (optimizer and epoch reset to start from epoch 0)")
+        # Note: optimizer state is NOT loaded, epoch starts from 0 (args.start_epoch default)
+        return  # Exit early, don't process resume
+
     if args.resume:
         if args.resume.startswith('https'):
             checkpoint = torch.hub.load_state_dict_from_url(
                 args.resume, map_location='cpu', check_hash=True)
         else:
-            checkpoint = torch.load(args.resume, map_location='cpu', weights_only=False)
+            checkpoint = torch.load(args.resume, map_location='cpu',weights_only=False)
 
-        #------------change
-                # Try to load with strict=False first to handle missing keys (e.g., CBP layers)
+        # Try to load with strict=False first to handle missing keys (e.g., CBP layers)
         # This allows loading checkpoints that don't have CBP layers when current model has them
         try:
             result = model_without_ddp.load_state_dict(checkpoint['model'], strict=False)
@@ -544,50 +583,7 @@ def auto_load_model(args, model, model_without_ddp, optimizer, loss_scaler, mode
             print(f"Warning: Non-strict loading failed: {e}")
             print("Attempting strict loading...")
             model_without_ddp.load_state_dict(checkpoint['model'], strict=True)
-     
         
-        #------------change
-
-        # Check if checkpoint contains CBP layers
-        checkpoint_keys = checkpoint['model'].keys() if 'model' in checkpoint else checkpoint.keys()
-        has_cbp_in_checkpoint = any('cbp_layer' in key for key in checkpoint_keys)
-        
-        # Check if current model has CBP layers
-        model_keys = model_without_ddp.state_dict().keys()
-        has_cbp_in_model = any('cbp_layer' in key for key in model_keys)
-        
-        if has_cbp_in_checkpoint and not has_cbp_in_model:
-            print(f"Warning: Checkpoint contains CBP layers but current model does not.")
-            print(f"  Please use --use_cbp or --use_freq_sens_cbp when evaluating.")
-            print(f"  Loading with strict=False to skip CBP layers...")
-            missing_keys, unexpected_keys = model_without_ddp.load_state_dict(checkpoint['model'], strict=False)
-            if missing_keys:
-                print(f"Missing keys (will use random init): {missing_keys[:5]}..." if len(missing_keys) > 5 else f"Missing keys: {missing_keys}")
-            if unexpected_keys:
-                print(f"Unexpected keys (CBP layers from checkpoint, ignored): {unexpected_keys[:5]}..." if len(unexpected_keys) > 5 else f"Unexpected keys: {unexpected_keys}")
-        elif not has_cbp_in_checkpoint and has_cbp_in_model:
-            print(f"Warning: Current model has CBP layers but checkpoint does not.")
-            print(f"  Loading with strict=False...")
-            missing_keys, unexpected_keys = model_without_ddp.load_state_dict(checkpoint['model'], strict=False)
-            if missing_keys:
-                print(f"Missing keys (CBP layers, will use random init): {missing_keys[:5]}..." if len(missing_keys) > 5 else f"Missing keys: {missing_keys}")
-            if unexpected_keys:
-                print(f"Unexpected keys (ignored): {unexpected_keys[:5]}..." if len(unexpected_keys) > 5 else f"Unexpected keys: {unexpected_keys}")
-        else:
-            # Both have CBP or both don't have CBP - try strict loading first
-            try:
-                model_without_ddp.load_state_dict(checkpoint['model'], strict=True)
-            except RuntimeError as e:
-                print(f"Warning: Strict loading failed: {e}")
-                print(f"  Attempting non-strict loading...")
-                missing_keys, unexpected_keys = model_without_ddp.load_state_dict(checkpoint['model'], strict=False)
-                if missing_keys:
-                    print(f"Missing keys: {missing_keys[:5]}..." if len(missing_keys) > 5 else f"Missing keys: {missing_keys}")
-                if unexpected_keys:
-                    print(f"Unexpected keys: {unexpected_keys[:5]}..." if len(unexpected_keys) > 5 else f"Unexpected keys: {unexpected_keys}")
-        
-
-
         print("Resume checkpoint %s" % args.resume)
         if 'optimizer' in checkpoint and 'epoch' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer'])
@@ -631,6 +627,8 @@ def adjust_learning_rate(optimizer, epoch, args):
         lr = args.min_lr + (args.lr - args.min_lr) * 0.5 * \
             (1. + math.cos(math.pi * (epoch - args.warmup_epochs) / (args.epochs - args.warmup_epochs)))
     for param_group in optimizer.param_groups:
+        if param_group.get("fixed_lr", False) and param_group.get("lr") is not None:
+            continue
         if "lr_scale" in param_group:
             param_group["lr"] = lr * param_group["lr_scale"]
         else:

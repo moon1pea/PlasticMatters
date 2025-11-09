@@ -1,3 +1,4 @@
+
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 
 # All rights reserved.
@@ -94,9 +95,12 @@ class LayerDecayValueAssigner(object):
             return get_num_layer_for_convnext(var_name)
 
 
-def get_parameter_groups(model, weight_decay=1e-5, skip_list=(), get_num_layer=None, get_layer_scale=None):
+def get_parameter_groups(model, weight_decay=1e-6, skip_list=(), get_num_layer=None, get_layer_scale=None, fixed_lrs=None, monitored_param_names=None):
     parameter_group_names = {}
     parameter_group_vars = {}
+
+    monitored_param_names = set(monitored_param_names or [])
+    fixed_lrs = fixed_lrs or {}
 
     for name, param in model.named_parameters():
         if not param.requires_grad:
@@ -115,6 +119,15 @@ def get_parameter_groups(model, weight_decay=1e-5, skip_list=(), get_num_layer=N
             layer_id = None
 
         if group_name not in parameter_group_names:
+            base_lr = None
+            fixed_lr_flag = False
+            if name in monitored_param_names:
+                base_lr = fixed_lrs.get("cbp_monitored", None)
+                fixed_lr_flag = base_lr is not None
+            else:
+                base_lr = fixed_lrs.get("cbp_unmonitored", None)
+                fixed_lr_flag = base_lr is not None
+
             if get_layer_scale is not None:
                 scale = get_layer_scale(layer_id)
             else:
@@ -123,13 +136,28 @@ def get_parameter_groups(model, weight_decay=1e-5, skip_list=(), get_num_layer=N
             parameter_group_names[group_name] = {
                 "weight_decay": this_weight_decay,
                 "params": [],
-                "lr_scale": scale
+                "lr_scale": scale,
+                "lr": base_lr,
+                "fixed_lr": fixed_lr_flag
             }
             parameter_group_vars[group_name] = {
                 "weight_decay": this_weight_decay,
                 "params": [],
-                "lr_scale": scale
+                "lr_scale": scale,
+                "lr": base_lr,
+                "fixed_lr": fixed_lr_flag
             }
+
+        current_group = parameter_group_vars[group_name]
+        if current_group["lr"] is None:
+            if name in monitored_param_names:
+                lr_value = fixed_lrs.get("cbp_monitored", None)
+                current_group["lr"] = lr_value
+                current_group["fixed_lr"] = lr_value is not None
+            else:
+                lr_value = fixed_lrs.get("cbp_unmonitored", None)
+                current_group["lr"] = lr_value
+                current_group["fixed_lr"] = lr_value is not None
 
         parameter_group_vars[group_name]["params"].append(param)
         parameter_group_names[group_name]["params"].append(name)
@@ -137,7 +165,7 @@ def get_parameter_groups(model, weight_decay=1e-5, skip_list=(), get_num_layer=N
     return list(parameter_group_vars.values())
 
 
-def create_optimizer(args, model, get_num_layer=None, get_layer_scale=None, filter_bias_and_bn=True, skip_list=None):
+def create_optimizer(args, model, get_num_layer=None, get_layer_scale=None, filter_bias_and_bn=True, skip_list=None, monitored_param_names=None):
     opt_lower = args.opt.lower()
     weight_decay = args.weight_decay
     # if weight_decay and filter_bias_and_bn:
@@ -147,7 +175,11 @@ def create_optimizer(args, model, get_num_layer=None, get_layer_scale=None, filt
             skip = skip_list
         elif hasattr(model, 'no_weight_decay'):
             skip = model.no_weight_decay()
-        parameters = get_parameter_groups(model, weight_decay, skip, get_num_layer, get_layer_scale)
+        fixed_lrs = {
+            "cbp_monitored": getattr(args, "cbp_monitored_lr", 1e-6),
+            "cbp_unmonitored": getattr(args, "cbp_unmonitored_lr", 1e-8),
+        }
+        parameters = get_parameter_groups(model, weight_decay, skip, get_num_layer, get_layer_scale, fixed_lrs=fixed_lrs, monitored_param_names=monitored_param_names)
         weight_decay = 0.
     else:
         parameters = model.parameters()

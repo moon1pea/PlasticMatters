@@ -163,9 +163,92 @@ class ResNet(nn.Module):
                     nn.init.constant_(m.bn2.weight, 0)
         
         # Add CBP layers if enabled
+        # 1108
+        self._cbp_monitored_parameters_ids = set()
+
         if self.use_cbp:
             self._add_cbp_layers()
     
+    # def _add_cbp_layers(self):
+    #     """Add CBP layers to the ResNet architecture, adapted for ResNet50."""
+    #     # Get default CBP parameters
+    #     replacement_rate = self.cbp_params.get('replacement_rate', 1e-5)
+    #     maturity_threshold = self.cbp_params.get('maturity_threshold', 1000)
+    #     decay_rate = self.cbp_params.get('decay_rate', 0.99)
+    #     util_type = self.cbp_params.get('util_type', 'contribution')
+        
+    #     # CBP after layer2 - monitor layer2 output and layer3 input
+    #     if hasattr(self, 'layer2') and hasattr(self, 'layer3'):
+    #         # Get the first block of layer3 to monitor its input
+    #         layer3_first_block = self.layer3[0]
+    #         in_layer = self.layer2[-1].conv3 if hasattr(self.layer2[-1], 'conv3') else self.layer2[-1].conv2
+    #         out_layer = layer3_first_block.conv1
+    #         self._register_cbp_module_params(in_layer)
+    #         self._register_cbp_module_params(out_layer)
+ 
+    #         self.cbp_layer2 = CBPConv(
+    #             #1108 in_layer=self.layer2[-1].conv3 if hasattr(self.layer2[-1], 'conv3') else self.layer2[-1].conv2,
+    #             #1108 out_layer=layer3_first_block.conv1,
+    #             in_layer=in_layer,
+    #             out_layer=out_layer,
+    #             replacement_rate=replacement_rate,
+    #             maturity_threshold=maturity_threshold,
+    #             decay_rate=decay_rate,
+    #             util_type=util_type,
+    #             # 新增频域敏感度参数
+    #             frequency_sensitivity_enabled=self.cbp_params.get('frequency_sensitivity_enabled', True),
+    #             lambda_freq=self.cbp_params.get('lambda_freq', 0.1),
+    #             frequency_cutoff=self.cbp_params.get('frequency_cutoff', 15),
+    #             sensitivity_update_interval=self.cbp_params.get('sensitivity_update_interval', 100),
+    #             sensitivity_alpha=self.cbp_params.get('sensitivity_alpha', 0.1)
+    #         )
+    #         self.cbp_layer2.set_model_info(self, 'layer2')
+    #         self.cbp_layers.append(self.cbp_layer2)
+
+    #     # CBP after layer3 - monitor layer3 output and layer4 input
+    #     if hasattr(self, 'layer3') and hasattr(self, 'layer4'):
+    #         layer4_first_block = self.layer4[0]
+    #         #1108
+    #         in_layer = self.layer3[-1].conv3 if hasattr(self.layer3[-1], 'conv3') else self.layer3[-1].conv2
+    #         out_layer = layer4_first_block.conv1
+    #         self._register_cbp_module_params(in_layer)
+    #         self._register_cbp_module_params(out_layer)
+            
+    #         self.cbp_layer3 = CBPConv(
+    #             #in_layer=self.layer3[-1].conv3 if hasattr(self.layer3[-1], 'conv3') else self.layer3[-1].conv2,
+    #             #out_layer=layer4_first_block.conv1,
+    #             in_layer = self.layer3[-1].conv3 if hasattr(self.layer3[-1], 'conv3') else self.layer3[-1].conv2
+    #             out_layer = layer4_first_block.conv1
+    #             self._register_cbp_module_params(in_layer)
+    #             self._register_cbp_module_params(out_layer)
+            
+    #             replacement_rate=replacement_rate,
+    #             maturity_threshold=maturity_threshold,
+    #             decay_rate=decay_rate,
+    #             util_type=util_type,
+    #             # 新增频域敏感度参数
+    #             frequency_sensitivity_enabled=self.cbp_params.get('frequency_sensitivity_enabled', True),
+    #             lambda_freq=self.cbp_params.get('lambda_freq', 0.1),
+    #             frequency_cutoff=self.cbp_params.get('frequency_cutoff', 15),
+    #             sensitivity_update_interval=self.cbp_params.get('sensitivity_update_interval', 100),
+    #             sensitivity_alpha=self.cbp_params.get('sensitivity_alpha', 0.1)
+    #         )
+    #         self.cbp_layer3.set_model_info(self, 'layer3')
+    #         self.cbp_layers.append(self.cbp_layer3)
+
+    # #1108
+    # def _register_cbp_module_params(self, module):
+    #     if module is None:
+    #         return
+    #     for _, param in module.named_parameters(recurse=False):
+    #         self._cbp_monitored_parameters_ids.add(id(param))
+
+    # def get_cbp_monitored_param_names(self, prefix=""):
+    #     names = []
+    #     for name, param in self.named_parameters():
+    #         if id(param) in self._cbp_monitored_parameters_ids:
+    #             names.append(f"{prefix}{name}" if prefix else name)
+    #     return names
     def _add_cbp_layers(self):
         """Add CBP layers to the ResNet architecture, adapted for ResNet50."""
         # Get default CBP parameters
@@ -178,9 +261,17 @@ class ResNet(nn.Module):
         if hasattr(self, 'layer2') and hasattr(self, 'layer3'):
             # Get the first block of layer3 to monitor its input
             layer3_first_block = self.layer3[0]
+            last_block_layer2 = self.layer2[-1]
+            if hasattr(last_block_layer2, 'conv3'):
+                in_layer = last_block_layer2.conv3
+            else:
+                in_layer = last_block_layer2.conv2
+            out_layer = layer3_first_block.conv1
+            self._register_cbp_module_params(in_layer)
+            self._register_cbp_module_params(out_layer)
             self.cbp_layer2 = CBPConv(
-                in_layer=self.layer2[-1].conv3 if hasattr(self.layer2[-1], 'conv3') else self.layer2[-1].conv2,
-                out_layer=layer3_first_block.conv1,
+                in_layer=in_layer,
+                out_layer=out_layer,
                 replacement_rate=replacement_rate,
                 maturity_threshold=maturity_threshold,
                 decay_rate=decay_rate,
@@ -198,9 +289,17 @@ class ResNet(nn.Module):
         # CBP after layer3 - monitor layer3 output and layer4 input
         if hasattr(self, 'layer3') and hasattr(self, 'layer4'):
             layer4_first_block = self.layer4[0]
+            last_block_layer3 = self.layer3[-1]
+            if hasattr(last_block_layer3, 'conv3'):
+                in_layer = last_block_layer3.conv3
+            else:
+                in_layer = last_block_layer3.conv2
+            out_layer = layer4_first_block.conv1
+            self._register_cbp_module_params(in_layer)
+            self._register_cbp_module_params(out_layer)
             self.cbp_layer3 = CBPConv(
-                in_layer=self.layer3[-1].conv3 if hasattr(self.layer3[-1], 'conv3') else self.layer3[-1].conv2,
-                out_layer=layer4_first_block.conv1,
+                in_layer=in_layer,
+                out_layer=out_layer,
                 replacement_rate=replacement_rate,
                 maturity_threshold=maturity_threshold,
                 decay_rate=decay_rate,
@@ -214,6 +313,20 @@ class ResNet(nn.Module):
             )
             self.cbp_layer3.set_model_info(self, 'layer3')
             self.cbp_layers.append(self.cbp_layer3)
+
+    def _register_cbp_module_params(self, module):
+        if module is None:
+            return
+        for _, param in module.named_parameters(recurse=False):
+            self._cbp_monitored_parameters_ids.add(id(param))
+
+    def get_cbp_monitored_param_names(self, prefix=""):
+        names = []
+        for name, param in self.named_parameters():
+            if id(param) in self._cbp_monitored_parameters_ids:
+                names.append(f"{prefix}{name}" if prefix else name)
+        return names
+
 
     def _make_layer(self, block, planes, blocks, stride=1):
         downsample = None
@@ -322,7 +435,16 @@ class AIDE_Model(nn.Module):
         for param in self.openclip_convnext_xxl.parameters():
             param.requires_grad = False
 
-    
+
+#1108
+    def get_cbp_monitored_param_names(self):
+        monitored = set()
+        if hasattr(self.model_min, 'get_cbp_monitored_param_names'):
+            monitored.update(self.model_min.get_cbp_monitored_param_names(prefix="model_min."))
+        if hasattr(self.model_max, 'get_cbp_monitored_param_names'):
+            monitored.update(self.model_max.get_cbp_monitored_param_names(prefix="model_max."))
+        return sorted(monitored)
+
 
     def forward(self, x):
 
