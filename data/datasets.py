@@ -141,12 +141,30 @@ Perturbations = K.container.ImageSequential(
     K.RandomJPEG(jpeg_quality=(30, 100), p=0.1)
 )
 
+def random_patch_shuffle(img, patch_size=16):
+    if not torch.is_tensor(img):
+        raise TypeError(f"expected Tensor input but got {type(img)}")
+    if img.dim() != 3:
+        raise ValueError(f"expected 3D tensor (C, H, W) but got shape {img.shape}")
+    c, h, w = img.shape
+    if h % patch_size != 0 or w % patch_size != 0:
+        raise ValueError(f"image size ({h}, {w}) not divisible by patch_size {patch_size}")
+    grid_h = h // patch_size
+    grid_w = w // patch_size
+    patches = img.view(c, grid_h, patch_size, grid_w, patch_size)
+    patches = patches.permute(0, 1, 3, 2, 4).contiguous().view(c, grid_h * grid_w, patch_size, patch_size)
+    shuffle_idx = torch.randperm(grid_h * grid_w)
+    patches = patches[:, shuffle_idx]
+    patches = patches.view(c, grid_h, grid_w, patch_size, patch_size).permute(0, 1, 3, 2, 4).contiguous()
+    return patches.view(c, h, w)
+
+
 transform_before = transforms.Compose([
-    transforms.Resize((256, 256)), 
+    transforms.Resize((256, 256)),
     transforms.ToTensor(),
+    transforms.Lambda(lambda x: random_patch_shuffle(x, patch_size=16)),
     transforms.Lambda(lambda x: Perturbations(x)[0])
-    ]
-)
+])
 transform_before_test = transforms.Compose([
     transforms.ToTensor(),
     ]
