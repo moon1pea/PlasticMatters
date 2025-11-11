@@ -257,62 +257,84 @@ class ResNet(nn.Module):
         decay_rate = self.cbp_params.get('decay_rate', 0.99)
         util_type = self.cbp_params.get('util_type', 'contribution')
         
-        # CBP after layer2 - monitor layer2 output and layer3 input
-        if hasattr(self, 'layer2') and hasattr(self, 'layer3'):
-            # Get the first block of layer3 to monitor its input
-            layer3_first_block = self.layer3[0]
-            last_block_layer2 = self.layer2[-1]
-            if hasattr(last_block_layer2, 'conv3'):
-                in_layer = last_block_layer2.conv3
-            else:
-                in_layer = last_block_layer2.conv2
-            out_layer = layer3_first_block.conv1
+        def _create_cbp_layer(attr_name, in_layer, out_layer, monitor_name):
+            if in_layer is None or out_layer is None:
+                return None
             self._register_cbp_module_params(in_layer)
             self._register_cbp_module_params(out_layer)
-            self.cbp_layer2 = CBPConv(
+            cbp_module = CBPConv(
                 in_layer=in_layer,
                 out_layer=out_layer,
                 replacement_rate=replacement_rate,
                 maturity_threshold=maturity_threshold,
                 decay_rate=decay_rate,
                 util_type=util_type,
-                # 新增频域敏感度参数
                 frequency_sensitivity_enabled=self.cbp_params.get('frequency_sensitivity_enabled', True),
                 lambda_freq=self.cbp_params.get('lambda_freq', 0.1),
                 frequency_cutoff=self.cbp_params.get('frequency_cutoff', 15),
                 sensitivity_update_interval=self.cbp_params.get('sensitivity_update_interval', 100),
                 sensitivity_alpha=self.cbp_params.get('sensitivity_alpha', 0.1)
             )
-            self.cbp_layer2.set_model_info(self, 'layer2')
-            self.cbp_layers.append(self.cbp_layer2)
+            cbp_module.set_model_info(self, monitor_name)
+            setattr(self, attr_name, cbp_module)
+            self.cbp_layers.append(cbp_module)
+            return cbp_module
 
-        # CBP after layer3 - monitor layer3 output and layer4 input
+        def _get_block(layer_seq, idx):
+            if not isinstance(layer_seq, nn.Sequential):
+                return None
+            if idx < 0 or idx >= len(layer_seq):
+                return None
+            return layer_seq[idx]
+
+        # CBP for layer2 first block
+        if hasattr(self, 'layer2'):
+            layer2_first_block = _get_block(self.layer2, 0)
+            if layer2_first_block is not None:
+                in_layer_block1 = getattr(layer2_first_block, 'conv2', None)
+                out_layer_block1 = getattr(layer2_first_block, 'conv3', None)
+                _create_cbp_layer('cbp_layer2_block1', in_layer_block1, out_layer_block1, 'layer2.0')
+
+        # CBP after layer2 - monitor last block conv2->conv3 and layer3 first block
+        if hasattr(self, 'layer2') and hasattr(self, 'layer3'):
+            layer3_first_block = _get_block(self.layer3, 0)
+            last_block_layer2 = _get_block(self.layer2, len(self.layer2) - 1)
+            in_layer = getattr(last_block_layer2, 'conv2', None) if last_block_layer2 is not None else None
+            if in_layer is None and last_block_layer2 is not None:
+                in_layer = getattr(last_block_layer2, 'conv3', None)
+            out_layer = getattr(last_block_layer2, 'conv3', None) if last_block_layer2 is not None else None
+            monitor_layer2_last = f"layer2.{len(self.layer2) - 1}" if isinstance(self.layer2, nn.Sequential) else 'layer2'
+            _create_cbp_layer('cbp_layer2_last', in_layer, out_layer, monitor_layer2_last)
+
+            if layer3_first_block is not None:
+                in_layer_block1 = getattr(layer3_first_block, 'conv2', None)
+                out_layer_block1 = getattr(layer3_first_block, 'conv3', None)
+                _create_cbp_layer('cbp_layer3_block1', in_layer_block1, out_layer_block1, 'layer3.0')
+
+        # CBP after layer3 - monitor last block conv2->conv3 and layer4 first block
         if hasattr(self, 'layer3') and hasattr(self, 'layer4'):
-            layer4_first_block = self.layer4[0]
-            last_block_layer3 = self.layer3[-1]
-            if hasattr(last_block_layer3, 'conv3'):
-                in_layer = last_block_layer3.conv3
-            else:
-                in_layer = last_block_layer3.conv2
-            out_layer = layer4_first_block.conv1
-            self._register_cbp_module_params(in_layer)
-            self._register_cbp_module_params(out_layer)
-            self.cbp_layer3 = CBPConv(
-                in_layer=in_layer,
-                out_layer=out_layer,
-                replacement_rate=replacement_rate,
-                maturity_threshold=maturity_threshold,
-                decay_rate=decay_rate,
-                util_type=util_type,
-                # 新增频域敏感度参数
-                frequency_sensitivity_enabled=self.cbp_params.get('frequency_sensitivity_enabled', True),
-                lambda_freq=self.cbp_params.get('lambda_freq', 0.1),
-                frequency_cutoff=self.cbp_params.get('frequency_cutoff', 15),
-                sensitivity_update_interval=self.cbp_params.get('sensitivity_update_interval', 100),
-                sensitivity_alpha=self.cbp_params.get('sensitivity_alpha', 0.1)
-            )
-            self.cbp_layer3.set_model_info(self, 'layer3')
-            self.cbp_layers.append(self.cbp_layer3)
+            layer4_first_block = _get_block(self.layer4, 0)
+            last_block_layer3 = _get_block(self.layer3, len(self.layer3) - 1)
+            in_layer = getattr(last_block_layer3, 'conv2', None) if last_block_layer3 is not None else None
+            if in_layer is None and last_block_layer3 is not None:
+                in_layer = getattr(last_block_layer3, 'conv3', None)
+            out_layer = getattr(last_block_layer3, 'conv3', None) if last_block_layer3 is not None else None
+            monitor_layer3_last = f"layer3.{len(self.layer3) - 1}" if isinstance(self.layer3, nn.Sequential) else 'layer3'
+            _create_cbp_layer('cbp_layer3_last', in_layer, out_layer, monitor_layer3_last)
+
+            if layer4_first_block is not None:
+                in_layer_block1 = getattr(layer4_first_block, 'conv2', None)
+                out_layer_block1 = getattr(layer4_first_block, 'conv3', None)
+                _create_cbp_layer('cbp_layer4_block1', in_layer_block1, out_layer_block1, 'layer4.0')
+
+        # CBP for layer4 last block
+        if hasattr(self, 'layer4'):
+            layer4_last_block = _get_block(self.layer4, len(self.layer4) - 1)
+            if layer4_last_block is not None:
+                in_layer_last = getattr(layer4_last_block, 'conv2', None)
+                out_layer_last = getattr(layer4_last_block, 'conv3', None)
+                monitor_layer4_last = f"layer4.{len(self.layer4) - 1}" if isinstance(self.layer4, nn.Sequential) else 'layer4'
+                _create_cbp_layer('cbp_layer4_last', in_layer_last, out_layer_last, monitor_layer4_last)
 
     def _register_cbp_module_params(self, module):
         if module is None:
@@ -357,17 +379,37 @@ class ResNet(nn.Module):
         x = self.layer1(x)
         
         # Pass through layer2 and apply CBP
-        x = self.layer2(x)
-        if self.use_cbp and hasattr(self, 'cbp_layer2'):
-            x = self.cbp_layer2(x)
+        if isinstance(self.layer2, nn.Sequential):
+            for idx, block in enumerate(self.layer2):
+                x = block(x)
+                if self.use_cbp and idx == 0 and hasattr(self, 'cbp_layer2_block1'):
+                    x = self.cbp_layer2_block1(x)
+        else:
+            x = self.layer2(x)
+        if self.use_cbp and hasattr(self, 'cbp_layer2_last'):
+            x = self.cbp_layer2_last(x)
         
         # Pass through layer3 and apply CBP
-        x = self.layer3(x)
-        if self.use_cbp and hasattr(self, 'cbp_layer3'):
-            x = self.cbp_layer3(x)
+        if isinstance(self.layer3, nn.Sequential):
+            for idx, block in enumerate(self.layer3):
+                x = block(x)
+                if self.use_cbp and idx == 0 and hasattr(self, 'cbp_layer3_block1'):
+                    x = self.cbp_layer3_block1(x)
+        else:
+            x = self.layer3(x)
+        if self.use_cbp and hasattr(self, 'cbp_layer3_last'):
+            x = self.cbp_layer3_last(x)
         
         # Pass through layer4
-        x = self.layer4(x)
+        if isinstance(self.layer4, nn.Sequential):
+            for idx, block in enumerate(self.layer4):
+                x = block(x)
+                if self.use_cbp and idx == 0 and hasattr(self, 'cbp_layer4_block1'):
+                    x = self.cbp_layer4_block1(x)
+        else:
+            x = self.layer4(x)
+        if self.use_cbp and hasattr(self, 'cbp_layer4_last'):
+            x = self.cbp_layer4_last(x)
 
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)

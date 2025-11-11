@@ -37,6 +37,7 @@ class SensitivityAnalyzer:
     
     def _register_hook(self):
         """注册钩子函数"""
+        self.captured_activation = None
         if self.model is not None and self.target_layer_name is not None:
             # 查找目标层
             target_module = None
@@ -129,19 +130,16 @@ class SensitivityAnalyzer:
     
     def _estimate_filtered_activations(self, activations, input_data, filtered_input):
         """估算滤波后的激活值（备用方法）"""
+        # 统一计算输入差异比例（按 batch 的均值缩放成标量，避免通道数不匹配）
+        input_diff = torch.abs(input_data - filtered_input).mean(dim=(2, 3))  # (B, C_in)
+        input_base = input_data.abs().mean(dim=(2, 3)) + 1e-6  # (B, C_in)
+        diff_ratio = (input_diff / input_base).mean(dim=1, keepdim=True)  # (B, 1)
+
         if activations.dim() == 4:  # 卷积层
-            # 对于卷积层，我们通过输入数据的变化来估算激活值的变化
-            input_diff = torch.abs(input_data - filtered_input).mean(dim=(2, 3))  # (B, C)
-            
-            # 估算滤波后的激活值
-            filtered_activations = activations - activations * (input_diff.unsqueeze(-1).unsqueeze(-1) / 
-                                                               (input_data.abs().mean(dim=(2, 3)).unsqueeze(-1).unsqueeze(-1) + 1e-6))
+            diff_ratio = diff_ratio.unsqueeze(-1).unsqueeze(-1)  # (B,1,1,1)
+            filtered_activations = activations - activations * diff_ratio
         else:  # 全连接层
-            # 对于全连接层，直接使用输入数据的变化
-            input_diff = torch.abs(input_data - filtered_input).mean(dim=(2, 3))  # (B, C)
-            
-            # 估算滤波后的激活值
-            filtered_activations = activations - activations * (input_diff / (input_data.abs().mean(dim=(2, 3)) + 1e-6))
+            filtered_activations = activations - activations * diff_ratio
         
         return filtered_activations
     

@@ -141,7 +141,7 @@ Perturbations = K.container.ImageSequential(
     K.RandomJPEG(jpeg_quality=(30, 100), p=0.1)
 )
 
-def random_patch_shuffle(img, patch_size=16):
+def random_patch_shuffle(img, patch_size=0):
     if not torch.is_tensor(img):
         raise TypeError(f"expected Tensor input but got {type(img)}")
     if img.dim() != 3:
